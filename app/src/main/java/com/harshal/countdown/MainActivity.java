@@ -12,6 +12,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -45,6 +46,7 @@ public class MainActivity extends AppCompatActivity  {
     private Switch connectionSwitch;
     private URL url;
     private HttpURLConnection conn;
+    private Context context;
     private Runtime runtime;
     private Process  mIpAddrProcess;
     private String pingCommand,ipUrlStatus;
@@ -95,22 +97,18 @@ public class MainActivity extends AppCompatActivity  {
         warning = findViewById(R.id.warning);
         progressBar = findViewById(R.id.progressBar);
         linkInput =findViewById(R.id.linkInput);
+
         start.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if(ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
-                        && ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED){
+                        || ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED){
                     ActivityCompat.requestPermissions(MainActivity.this,
                             new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},
                             1);
-
-                }
-                else if(ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                        != PackageManager.PERMISSION_GRANTED){
                     ActivityCompat.requestPermissions(MainActivity.this,
                             new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
-                            1);
-
+                            2);
                 }
                 else if(linkInput.getText().toString().matches("")) {
                     warning.setVisibility(View.VISIBLE);
@@ -264,10 +262,11 @@ public class MainActivity extends AppCompatActivity  {
         thread1.start();
         t.start();
         thread2.start();
-
-
         }
-
+    private void hideKeyboard(){
+        InputMethodManager imm = (InputMethodManager) context.getSystemService(Context.INPUT_METHOD_SERVICE);
+        imm.hideSoftInputFromWindow(linkInput.getWindowToken(), 0);
+    }
         }
 
 
