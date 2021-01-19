@@ -1,6 +1,5 @@
 package com.harshal.countdown;
 
-import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -8,11 +7,10 @@ import androidx.core.content.ContextCompat;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.SystemClock;
 import android.util.Log;
-import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -27,62 +25,36 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
 public class MainActivity extends AppCompatActivity  {
     private static final String TAG ="MainActivity";
     private TextView timerSec,timerText,warning;
-    private Button start,stop;
-    private Boolean countdownRunning=false,urlUp=false;
+    private Button start,pause;
+    private Boolean countdownRunning=false,urlUp=false,permission=false;
     private int milliSecondsRemaining =5000;
     private ProgressBar progressBar;
     private EditText linkInput;
     private Switch connectionSwitch;
     private URL url;
     private HttpURLConnection conn;
-    private Context context;
     private Runtime runtime;
-    private Process  mIpAddrProcess;
-    private String pingCommand,ipUrlStatus;
+    private Process mIpAdarProcess;
+    private String pingCommand,ipUrlStatus,dateNow,datetime;
     private int mode=0 ,mExitValue = 0;
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        switch (requestCode) {
-            case 2:
-                Log.d(TAG, "External storage2");
-                if(grantResults[0]== PackageManager.PERMISSION_GRANTED){
-                    Log.v(TAG,"Permission: "+permissions[0]+ "was "+grantResults[0]);
-                    //resume tasks needing this permission
-                    Toast.makeText(this, "permission granted", Toast.LENGTH_SHORT).show();
-                }else{
-                    Toast.makeText(this, "permission not granted", Toast.LENGTH_SHORT).show();
-                }
-                break;
-
-            case 3:
-                Log.d(TAG, "External storage1");
-                if(grantResults[0]== PackageManager.PERMISSION_GRANTED){
-                    Log.v(TAG,"Permission: "+permissions[0]+ "was "+grantResults[0]);
-                    //resume tasks needing this permission
-                    Toast.makeText(this, "permission granted", Toast.LENGTH_SHORT).show();
-                }else{
-                    Toast.makeText(this, "permission not granted", Toast.LENGTH_SHORT).show();
-                }
-                break;
-        }
-    }
-
-    LocalDateTime now;
-    File gpxfile;
-    DateTimeFormatter dtf;
+    private File logFile;
+    private FileWriter fw;
+    private BufferedWriter bw;
+    private PrintWriter pw;
+    private LocalDateTime now;
+    private DateTimeFormatter dtf;
     Thread t = null;
     Thread thread1,thread2;
     @Override
@@ -93,47 +65,49 @@ public class MainActivity extends AppCompatActivity  {
         timerSec =findViewById(R.id.timerSec);
         timerText = findViewById(R.id.timerText);
         start =findViewById(R.id.btnStart);
-        stop =findViewById(R.id.btnStop);
+        pause =findViewById(R.id.btnStop);
         warning = findViewById(R.id.warning);
         progressBar = findViewById(R.id.progressBar);
         linkInput =findViewById(R.id.linkInput);
-
+//if user clicks start button
         start.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if(ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
-                        || ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED){
-                    ActivityCompat.requestPermissions(MainActivity.this,
-                            new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},
-                            1);
-                    ActivityCompat.requestPermissions(MainActivity.this,
-                            new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
-                            2);
-                }
-                else if(linkInput.getText().toString().matches("")) {
+                isWriteStoragePermissionGranted();
+                isReadStoragePermissionGranted();
+                if(linkInput.getText().toString().matches("")) {
                     warning.setVisibility(View.VISIBLE);
                 }
                 else if(!countdownRunning){
+                    if(isReadStoragePermissionGranted() && isWriteStoragePermissionGranted()){
+                        createFolder();
+                    }
+                    else{
+                        System.out.println("local logging disabled :: external storage permission inactive");
+                    }
                     countdownRunning =true;
+                    linkInput.setEnabled(false);
                     timerText.setText("Timer running");
                     warning.setVisibility(View.INVISIBLE);
-                    InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
-                    imm.hideSoftInputFromWindow(linkInput.getWindowToken(), 0);
+                    hideKeyboard();
                 }
                 else {
                     Toast.makeText(MainActivity.this, "Timer already running!", Toast.LENGTH_SHORT).show();
                 }
             }
         });
-        stop.setOnClickListener(new View.OnClickListener() {
+//if user clicks pause
+        pause.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if(countdownRunning){
                     countdownRunning =false;
+                    linkInput.setEnabled(true);
                     timerText.setText("Timer paused");
                 }
             }
         });
+
         connectionSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
@@ -157,7 +131,7 @@ public class MainActivity extends AppCompatActivity  {
         }
         });
 
-
+//first thread
         thread1 = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -166,38 +140,53 @@ public class MainActivity extends AppCompatActivity  {
                         progressBar.incrementProgressBy(1);
 
                         if (milliSecondsRemaining == 0) {
-                            progressBar.setProgress(0);
+
                             runOnUiThread(new Runnable() {
                                 public void run() {
-                                        if(mode==0){
-                                            if(mExitValue==0){
-                                                ipUrlStatus ="reachable";
+                                    if (mode == 0) {
+                                        if (mExitValue == 0) {
+
                                             Toast.makeText(MainActivity.this, "IP working!", Toast.LENGTH_SHORT).show();
-                                        }
-                                            else{
-                                                ipUrlStatus ="not reachable";
+                                        } else {
+
                                             Toast.makeText(MainActivity.this, "IP not working!", Toast.LENGTH_SHORT).show();
                                         }
 
+                                    } else {
+                                        if (urlUp) {
+                                            Toast.makeText(MainActivity.this, "URL working", Toast.LENGTH_SHORT).show();
+
+                                        } else {
+                                            Toast.makeText(MainActivity.this, "URL not working", Toast.LENGTH_SHORT).show();
+
                                         }
-                                        else{
-                                            if(urlUp){
-                                                Toast.makeText(MainActivity.this, "URL working", Toast.LENGTH_SHORT).show();
-                                                ipUrlStatus ="reachable";
-                                            }
-                                            else{
-                                                Toast.makeText(MainActivity.this, "URL not working", Toast.LENGTH_SHORT).show();
-                                                ipUrlStatus ="not reachable";
-                                            }
-                                        }
+                                    }
                                 }
                             });
+                            if (permission) {
+
+                                String s = System.lineSeparator() + linkInput.getText().toString() + " , status :: " + ipUrlStatus + " , DATE:TIME ::" + datetime;
+                                try {
+                                    fw = new FileWriter(logFile.getPath(), true);
+                                    bw = new BufferedWriter(fw);
+                                    pw = new PrintWriter(bw);
+                                    pw.println(s);
+                                    System.out.println("log written successfully");
+                                    pw.flush();
+
+                                } catch (IOException e) {
+
+                                }
+
+                            }
 
                             milliSecondsRemaining = 5000;
-
+                            progressBar.setProgress(0);
                         }
                         milliSecondsRemaining -= 50;
-                        System.out.println("milliseconds remaining:"+milliSecondsRemaining);
+                        }
+
+                        //System.out.println("milliseconds remaining:"+milliSecondsRemaining);
                         SystemClock.sleep(50);
                         timerSec.post(new Runnable() {
                             public void run() {
@@ -208,8 +197,9 @@ public class MainActivity extends AppCompatActivity  {
 
                     }
                 }
-            }
+
         });
+        //second thread
         t = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -219,8 +209,14 @@ public class MainActivity extends AppCompatActivity  {
                        try
                        {
                            pingCommand = "/system/bin/ping -c " + linkInput.getText().toString();
-                           mIpAddrProcess = runtime.exec(pingCommand);
-                           mExitValue = mIpAddrProcess.waitFor();
+                           mIpAdarProcess = runtime.exec(pingCommand);
+                           mExitValue = mIpAdarProcess.waitFor();
+                           if(mExitValue==0){
+                               ipUrlStatus="ip reachable";
+                           }
+                           else {
+                               ipUrlStatus="ip unreachable";
+                           }
                        } catch (Exception ignore)
                        {
                            ignore.printStackTrace();
@@ -231,6 +227,7 @@ public class MainActivity extends AppCompatActivity  {
                }
             }
         });
+        //third thread
         thread2 = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -241,9 +238,11 @@ public class MainActivity extends AppCompatActivity  {
                             conn = (HttpURLConnection) url.openConnection();
                             if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
                                 urlUp = true;
+                                ipUrlStatus="url reachable ";
                                 System.out.println("responseCode: good");
                             } else {
                                 urlUp = false;
+                                ipUrlStatus="url not reachable";
                                 System.out.println("responseCode: "+conn.getResponseCode());
                             }
                         } catch (SocketTimeoutException tout) {
@@ -263,11 +262,126 @@ public class MainActivity extends AppCompatActivity  {
         t.start();
         thread2.start();
         }
+//creates a folder in external storage (phone storage)
+    private void createFolder() {
+        String storageState = Environment.getExternalStorageState();
+        System.out.println("storage state : "+storageState );
+        File directory = new File(Environment.getExternalStorageDirectory() + java.io.File.separator +"Countdown/logs");
+        System.out.println("folder path : "+directory);
+        if (!directory.exists()) {
+            System.out.println(directory.mkdirs() ? "Directory has been created" : "Directory not created");
+
+        }
+        else{
+            System.out.println("Directory already exists");
+        }
+        if(directory.exists()){
+            permission=true;
+            dtf = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss");
+            now = LocalDateTime.now();
+            datetime =dtf.format(now);
+            dateNow=dtf.format(now);
+            dateNow=dateNow.substring(0,10);
+            dateNow=dateNow.replace("/","_");
+            System.out.println("date now : "+dateNow);
+            logFile = new File(Environment.getExternalStorageDirectory() + java.io.File.separator +"Countdown/logs/"+java.io.File.separator+dateNow+".txt");
+            if(!logFile.exists()){
+
+                try {
+                    System.out.println("creating log file");
+                    logFile.createNewFile();
+                    System.out.println("log file created");
+
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+            else{
+                System.out.println("log file already exists");
+            }
+
+        }
+        else{
+            System.out.println("logging disabled due to inactive permission");
+            permission=false;
+        }
+
+    }
+
+    public  boolean isReadStoragePermissionGranted() {
+
+        if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED) {
+            return true;
+
+        } else {
+
+            System.out.println("Requesting read permission");
+            Toast.makeText(this, "Requesting read permission", Toast.LENGTH_SHORT).show();
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 3);
+
+        }
+        if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED) {
+            return true;
+        }
+        else{
+            return false;
+        }
+
+
+    }
+
+    public  boolean isWriteStoragePermissionGranted() {
+            if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    == PackageManager.PERMISSION_GRANTED) {
+                return true;
+            } else {
+
+                System.out.println("Requesting write permission");
+                Toast.makeText(this, "Requesting write permission", Toast.LENGTH_SHORT).show();
+                ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 2);
+
+            }
+        if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED) {
+            return true;
+        }else{
+            return false;
+        }
+        }
+
+
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        switch (requestCode) {
+            case 2:
+                Log.d(TAG, "External storage2");
+                if(grantResults[0]== PackageManager.PERMISSION_GRANTED){
+                    System.out.println("write permission is granted");
+                    //resume tasks needing this permission
+                }else{
+                    System.out.println("write permission is denied");
+                }
+                break;
+
+            case 3:
+                Log.d(TAG, "External storage1");
+                if(grantResults[0]== PackageManager.PERMISSION_GRANTED){
+                    System.out.println("read permission is granted");
+                }else{
+                    System.out.println("read permission is denied");
+                }
+                break;
+        }
+    }
     private void hideKeyboard(){
-        InputMethodManager imm = (InputMethodManager) context.getSystemService(Context.INPUT_METHOD_SERVICE);
+        InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
         imm.hideSoftInputFromWindow(linkInput.getWindowToken(), 0);
     }
-        }
+}
 
 
 
